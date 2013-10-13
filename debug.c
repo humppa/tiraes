@@ -19,23 +19,23 @@
 
 void pprint(const char *msg, void *data) {
     uint8_t *byte = (uint8_t*) data;
-    printf("<<< %s\n", msg);
+    fprintf(stderr, "<<< %s\n", msg);
     for (int r=0; r<4; r++) {
         for (int c=0; c<4; c++) {
-            printf("  %02x (%02i)", byte[4*c+r], 4*c+r);
+            fprintf(stderr, "  %02x (%02i)", byte[4*c+r], 4*c+r);
         }
-        printf("\n");
+        fprintf(stderr, "\n");
     }
-    printf(">>>\n");
+    fprintf(stderr, ">>>\n");
 }
 
 void ppkeysched(const char *msg, uint8_t *exp, uint8_t Nb, uint8_t Nr) {
-    printf("[[[ %s\n", msg);
+    fprintf(stderr, "[[[ %s\n", msg);
     for (int i=0; i<Nb*(Nr+1); i++) {
         for (int j=0; j<4; j++) {
-            printf(" %02x", exp[4*i+j]);
+            fprintf(stderr, " %02x", exp[4*i+j]);
         }
-        printf("\n");
+        fprintf(stderr, "\n");
     }
-    printf("]]]\n");
+    fprintf(stderr, "]]]\n");
 }

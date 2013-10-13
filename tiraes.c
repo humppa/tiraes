@@ -18,12 +18,6 @@
 #include "debug.h"
 #include "tiraes.h"
 
-bool verbose = false;
-
-void say(const char *msg) {
-    if (verbose) printf("%s\n", msg);
-}
-
 void* malloc_or_die(size_t size) {
     void *ptr;
 
@@ -53,21 +47,29 @@ uint8_t galois(uint32_t a, uint8_t b) {
     return p;
 }
 
-uint8_t* galois_precalc(uint8_t mul) {
+uint8_t* galois_precalc(uint8_t n) {
     uint8_t *G_table = (uint8_t*) malloc_or_die(256);
 
     for (int i=0; i<256; i++) {
-        G_table[i] = galois(mul, i);
+        G_table[i] = galois(i, n);
     }
 
     return G_table;
 }
 
-void sub_byte(void *state) {
+void sub_bytes(void *state) {
     uint8_t *s = (uint8_t*) state;
 
     for (int i=0; i<16; i++) {
         s[i] = S_box[s[i]];
+    }
+}
+
+void inv_sub_bytes(void *state) {
+    uint8_t *s = (uint8_t*) state;
+
+    for (int i=0; i<16; i++) {
+        s[i] = S_box_inv[s[i]];
     }
 }
 
@@ -96,8 +98,33 @@ void shift_rows(void *state) {
     s[3] = buf;
 }
 
+void inv_shift_rows(void *state) {
+    uint8_t buf;
+    uint8_t *s = (uint8_t*) state;
+
+    buf = s[13];
+    s[13] = s[9];
+    s[9] = s[5];
+    s[5] = s[1];
+    s[1] = buf;
+
+    buf = s[2];
+    s[2] = s[10];
+    s[10] = buf;
+
+    buf = s[6];
+    s[6] = s[14];
+    s[14] = buf;
+
+    buf = s[3];
+    s[3] = s[7];
+    s[7] = s[11];
+    s[11] = s[15];
+    s[15] = buf;
+}
+
 void mix_columns(void *state) {
-    void *copy = malloc_or_die(16);
+    void *copy = malloc_or_die(16); /// FIXME optimize malloc away
 
     uint8_t *c = (uint8_t*) copy;
     uint8_t *s = (uint8_t*) state;
@@ -109,6 +136,24 @@ void mix_columns(void *state) {
         s[i+1] = c[i] ^ G2[c[i+1]] ^ G3[c[i+2]] ^ c[i+3];
         s[i+2] = c[i] ^ c[i+1] ^ G2[c[i+2]] ^ G3[c[i+3]];
         s[i+3] = G3[c[i]] ^ c[i+1] ^ c[i+2] ^ G2[c[i+3]];
+    }
+
+    /// FIXME also fix mem leak
+}
+
+void inv_mix_columns(void *state) {
+    void *copy = malloc_or_die(16); /// FIXME optimize malloc away
+
+    uint8_t *c = (uint8_t*) copy;
+    uint8_t *s = (uint8_t*) state;
+
+    memcpy(c, s, 16);
+
+    for (int i=0; i<16; i+=4) {
+        s[i]   = galois(c[i], 0x0e) ^ galois(c[i+1], 0x0b) ^ galois(c[i+2], 0x0d) ^ galois(c[i+3], 0x09);
+        s[i+1] = galois(c[i], 0x09) ^ galois(c[i+1], 0x0e) ^ galois(c[i+2], 0x0b) ^ galois(c[i+3], 0x0d);
+        s[i+2] = galois(c[i], 0x0d) ^ galois(c[i+1], 0x09) ^ galois(c[i+2], 0x0e) ^ galois(c[i+3], 0x0b);
+        s[i+3] = galois(c[i], 0x0b) ^ galois(c[i+1], 0x0d) ^ galois(c[i+2], 0x09) ^ galois(c[i+3], 0x0e);
     }
 }
 
@@ -146,7 +191,7 @@ uint8_t r_con(uint8_t in) {
     if (in == 0) return 0;
 
     for (out=1; in>1; in--) {
-        out = galois(out, 2);
+        out = galois(out, 2); /// FIXME lookup?
     }
 
     return out;
@@ -158,8 +203,8 @@ void *key_expansion(void *key) {
     uint32_t *tmp;
     uint32_t *key_w = (uint32_t*) key;
 
+    tmp = malloc_or_die(4);  /// FIXME optimize
     keysched = malloc_or_die(4*Nb*(Nr+1));
-    tmp = malloc_or_die(4);
 
     uint32_t *sched_w = (uint32_t*) keysched;
 
@@ -182,61 +227,41 @@ void *key_expansion(void *key) {
         }
     }
 
-    /// pexp("expanded key schedule", keysched);
+    /// ppkeysched("expanded key schedule", keysched, Nb, Nr);
 
-    free(tmp);
-    tmp = NULL;
+    free(tmp);  /// FIXME this too
 
     return keysched;
 }
 
-void cipher(void *key, void *state) {
-    void *keysched;
+void encrypt_cipher(void *keysched, void *state) {
+    add_round_key(state, keysched, 0);
 
-    uint64_t *key_d   = (uint64_t*) key;
-    uint64_t *state_d = (uint64_t*) state;
-
-    keysched = key_expansion(key);
-
-    state_d[0] ^= key_d[0];
-    state_d[1] ^= key_d[1];
-
-    for (int i=1; i<Nr; i++) {
-        printf("round %i\n", i);
-        pprint("fight!", state);
-
-        sub_byte(state);
-
-        pprint("substituted bytes", state);
-
+    for (int round=1; round<Nr; round++) {
+        sub_bytes(state);
         shift_rows(state);
-
-        pprint("shifted rows", state);
-
         mix_columns(state);
-
-        pprint("mix'd columns", state);
-
-        add_round_key(state, keysched, i);
-
-        pprint("round key'd", state);
+        add_round_key(state, keysched, round);
     }
 
-    printf("final round\n");
-    pprint("fight!", state);
-
-    sub_byte(state);
-
-    pprint("substituted bytes", state);
-
+    sub_bytes(state);
     shift_rows(state);
+    add_round_key(state, keysched, Nr);
+}
 
-    pprint("shifted rows", state);
-
+void decrypt_cipher(void *keysched, void *state) {
     add_round_key(state, keysched, Nr);
 
-    free(keysched);
-    keysched = NULL;
+    for (int round=Nr-1; round>=1; round--) {
+        inv_shift_rows(state);
+        inv_sub_bytes(state);
+        add_round_key(state, keysched, round);
+        inv_mix_columns(state);
+    }
+
+    inv_shift_rows(state);
+    inv_sub_bytes(state);
+    add_round_key(state, keysched, 0);
 }
 
 uint8_t hex_val(int chr) {
@@ -250,7 +275,7 @@ uint8_t hex_val(int chr) {
         return chr - 'a' + 10;
     }
     else {
-        errx(EXIT_FAILURE, "incomprehensible input %c", chr);
+        errx(EXIT_FAILURE, E_INPUT, chr);
     }
 }
 
@@ -271,7 +296,7 @@ void set_cipher_options(int bytes) {
         Nr = 14;
     }
     else {
-        errx(EXIT_FAILURE, "key must be exactly 32, 48 or 64 bytes i.e. 128, 192 or 256 bits");
+        errx(EXIT_FAILURE, "%s", E_KEYLEN);
     }
 }
 
@@ -286,7 +311,7 @@ void *key_from_file(char *keyfile) {
     uint8_t *key_b = (uint8_t*) key;
 
     if ((fp = fopen(keyfile, "r")) == NULL) {
-        err(EXIT_FAILURE, "unable to open key file");
+        err(EXIT_FAILURE, "%s", E_FILE);
     }
 
     while ((chr = getc(fp)) != EOF && i < KEY_MAX) {
@@ -312,10 +337,10 @@ void *key_from_opt(char *str) {
 
     for (int j=0; j<strlen(str); j++) {
         switch (str[j]) {
+            case ' ':
             case '.':
             case ':':
             case '-':
-            case ' ':
                 continue;
         }
 
@@ -329,8 +354,6 @@ void *key_from_opt(char *str) {
         }
     }
 
-    if (verbose) printf(MSG_READ, bytes);
-
     set_cipher_options(bytes);
 
     key = realloc(key, 4*Nk);
@@ -338,22 +361,58 @@ void *key_from_opt(char *str) {
     return key;
 }
 
+void crypto_loop(bool mode, void *key) {
+    int i = 0;
+    int chr = '\0';
+    void *state = NULL;
+    void *keysched = NULL;
+    void (*cipher)(void*, void*);
+
+    state = malloc_or_die(16);
+    keysched = key_expansion(key);
+    cipher = mode? &encrypt_cipher: &decrypt_cipher;
+
+    uint8_t *state_b = (uint8_t*) state;
+
+    while ((chr = getchar()) != EOF) {
+        state_b[i] = (uint8_t) chr;
+
+        i++;
+
+        if (i == 16) {
+            /// pprint("initial state", state);
+
+            (*cipher)(keysched, state);
+
+            /// pprint("final state", state);
+
+            for (int j=0; j<16; j++) putchar(state_b[j]);
+
+            i = 0;
+        }
+    }
+
+    /// FIXME Decrypt final state
+
+    free(state);
+}
+
 int main(int argc, char *argv[]) {
     int  opt;
+    bool mode = true;
     void *key = NULL;
-    void *state = NULL;
     char *keyfile = NULL;
     char *keyopt = NULL;
-    uint8_t *state_b = NULL;
-    uint32_t *state_w = NULL;
 
     /* tiraes [-e | -d] (-h <hexkey> | -f <filekey>) [-v]
      */
     while ((opt = getopt(argc, argv, "def:h:v")) != -1) {
         switch (opt) {
             case 'd':
+                mode = false;
                 break;
             case 'e':
+                mode = true;
                 break;
             case 'f':
                 keyfile = optarg;
@@ -361,16 +420,11 @@ int main(int argc, char *argv[]) {
             case 'h':
                 keyopt = optarg;
                 break;
-            case 'v':
-                verbose = true;
-                break;
             case '?':
                 exit(EXIT_FAILURE);
                 break;
         }
     }
-
-    if (verbose) puts(MSG_LOOKUP);
 
     G2 = galois_precalc(2);
     G3 = galois_precalc(3);
@@ -385,38 +439,20 @@ int main(int argc, char *argv[]) {
         errx(EXIT_FAILURE, "%s", E_NOKEY);
     }
 
-    state = malloc_or_die(4*Nk);
+    /// pprint("cipher key", key);
 
-    state_b = (uint8_t*) state;
-    state_w = (uint32_t*) state;
-
-    pprint("cipher key", key);
-
-    for (int c=0; c<4; c++) {
-        for (int r=0; r<4; r++) {
-            if ((state_b[4*r+c] = (unsigned char)getchar()) == EOF) {
-                printf("done at %i,%i\n", c, r);
-                c = 4;
-                break;
-            }
-        }
-    }
-
+#if 0
     state_w[0] = 0xa8f64332;
     state_w[1] = 0x8d305a88;
     state_w[2] = 0xa2983131;
     state_w[3] = 0x340737e0;
+#endif
 
-    pprint("initial state", state);
-
-    cipher(key, state);
-
-    pprint("final state", state);
+    crypto_loop(mode, key);
 
     free(G2);
     free(G3);
     free(key);
-    free(state);
 
     return 0;
 }
