@@ -17,6 +17,7 @@
 /* Error messages.
  */
 const char
+  *USAGE    = "[-e | -d] (-k <key> | -f <file>)",
   *E_FILE   = "Failed to open keyfile.\n",
   *E_INPUT  = "Incomprehensible character spotted: %c\n",
   *E_NOKEY  = "Unable to proceed without cipher key.\n",
@@ -31,8 +32,7 @@ uint8_t Nr;  //  [10,12,14] Number of rounds.
 /* Lookup tables for Galois multiplication.
  * http://en.wikipedia.org/wiki/Rijndael_mix_columns
  */
-uint8_t *G2;
-uint8_t *G3;
+uint8_t *G2, *G3, *G9, *Gb, *Gd, *Ge;
 
 /* Lookup tables for Rijndael S-box and its inverse.
  * http://en.wikipedia.org/wiki/Rijndael_S-box

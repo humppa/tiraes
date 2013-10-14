@@ -18,6 +18,8 @@
 #include "debug.h"
 #include "tiraes.h"
 
+void *copy = NULL;
+
 void* malloc_or_die(size_t size) {
     void *ptr;
 
@@ -124,8 +126,6 @@ void inv_shift_rows(void *state) {
 }
 
 void mix_columns(void *state) {
-    void *copy = malloc_or_die(16); /// FIXME optimize malloc away
-
     uint8_t *c = (uint8_t*) copy;
     uint8_t *s = (uint8_t*) state;
 
@@ -137,23 +137,19 @@ void mix_columns(void *state) {
         s[i+2] = c[i] ^ c[i+1] ^ G2[c[i+2]] ^ G3[c[i+3]];
         s[i+3] = G3[c[i]] ^ c[i+1] ^ c[i+2] ^ G2[c[i+3]];
     }
-
-    /// FIXME also fix mem leak
 }
 
 void inv_mix_columns(void *state) {
-    void *copy = malloc_or_die(16); /// FIXME optimize malloc away
-
     uint8_t *c = (uint8_t*) copy;
     uint8_t *s = (uint8_t*) state;
 
     memcpy(c, s, 16);
 
     for (int i=0; i<16; i+=4) {
-        s[i]   = galois(c[i], 0x0e) ^ galois(c[i+1], 0x0b) ^ galois(c[i+2], 0x0d) ^ galois(c[i+3], 0x09);
-        s[i+1] = galois(c[i], 0x09) ^ galois(c[i+1], 0x0e) ^ galois(c[i+2], 0x0b) ^ galois(c[i+3], 0x0d);
-        s[i+2] = galois(c[i], 0x0d) ^ galois(c[i+1], 0x09) ^ galois(c[i+2], 0x0e) ^ galois(c[i+3], 0x0b);
-        s[i+3] = galois(c[i], 0x0b) ^ galois(c[i+1], 0x0d) ^ galois(c[i+2], 0x09) ^ galois(c[i+3], 0x0e);
+        s[i]   = Ge[c[i]] ^ Gb[c[i+1]] ^ Gd[c[i+2]] ^ G9[c[i+3]];
+        s[i+1] = G9[c[i]] ^ Ge[c[i+1]] ^ Gb[c[i+2]] ^ Gd[c[i+3]];
+        s[i+2] = Gd[c[i]] ^ G9[c[i+1]] ^ Ge[c[i+2]] ^ Gb[c[i+3]];
+        s[i+3] = Gb[c[i]] ^ Gd[c[i+1]] ^ G9[c[i+2]] ^ Ge[c[i+3]];
     }
 }
 
@@ -191,7 +187,7 @@ uint8_t r_con(uint8_t in) {
     if (in == 0) return 0;
 
     for (out=1; in>1; in--) {
-        out = galois(out, 2); /// FIXME lookup?
+        out = G2[out];
     }
 
     return out;
@@ -203,7 +199,7 @@ void *key_expansion(void *key) {
     uint32_t *tmp;
     uint32_t *key_w = (uint32_t*) key;
 
-    tmp = malloc_or_die(4);  /// FIXME optimize
+    tmp = malloc_or_die(4);
     keysched = malloc_or_die(4*Nb*(Nr+1));
 
     uint32_t *sched_w = (uint32_t*) keysched;
@@ -229,7 +225,7 @@ void *key_expansion(void *key) {
 
     /// ppkeysched("expanded key schedule", keysched, Nb, Nr);
 
-    free(tmp);  /// FIXME this too
+    free(tmp);
 
     return keysched;
 }
@@ -368,6 +364,7 @@ void crypto_loop(bool mode, void *key) {
     void *keysched = NULL;
     void (*cipher)(void*, void*);
 
+    copy = malloc_or_die(16);
     state = malloc_or_die(16);
     keysched = key_expansion(key);
     cipher = mode? &encrypt_cipher: &decrypt_cipher;
@@ -380,11 +377,7 @@ void crypto_loop(bool mode, void *key) {
         i++;
 
         if (i == 16) {
-            /// pprint("initial state", state);
-
             (*cipher)(keysched, state);
-
-            /// pprint("final state", state);
 
             for (int j=0; j<16; j++) putchar(state_b[j]);
 
@@ -392,9 +385,11 @@ void crypto_loop(bool mode, void *key) {
         }
     }
 
-    /// FIXME Decrypt final state
+    /// FIXME cipher last block too
 
+    free(keysched);
     free(state);
+    free(copy);
 }
 
 int main(int argc, char *argv[]) {
@@ -404,9 +399,9 @@ int main(int argc, char *argv[]) {
     char *keyfile = NULL;
     char *keyopt = NULL;
 
-    /* tiraes [-e | -d] (-h <hexkey> | -f <filekey>) [-v]
+    /* tiraes [-e | -d] (-k <hexkey> | -f <filekey>)
      */
-    while ((opt = getopt(argc, argv, "def:h:v")) != -1) {
+    while ((opt = getopt(argc, argv, "def:hk:")) != -1) {
         switch (opt) {
             case 'd':
                 mode = false;
@@ -418,16 +413,24 @@ int main(int argc, char *argv[]) {
                 keyfile = optarg;
                 break;
             case 'h':
+                fprintf(stderr, "Usage: tiraes %s\n", USAGE);
+                exit(EXIT_SUCCESS);
+                break;
+            case 'k':
                 keyopt = optarg;
                 break;
             case '?':
-                exit(EXIT_FAILURE);
+                errx(EXIT_FAILURE, "%s", USAGE);
                 break;
         }
     }
 
     G2 = galois_precalc(2);
     G3 = galois_precalc(3);
+    G9 = galois_precalc(9);
+    Gb = galois_precalc(11);
+    Gd = galois_precalc(13);
+    Ge = galois_precalc(14);
 
     if (keyopt != NULL) {
         key = key_from_opt(keyopt);
@@ -438,15 +441,6 @@ int main(int argc, char *argv[]) {
     else {
         errx(EXIT_FAILURE, "%s", E_NOKEY);
     }
-
-    /// pprint("cipher key", key);
-
-#if 0
-    state_w[0] = 0xa8f64332;
-    state_w[1] = 0x8d305a88;
-    state_w[2] = 0xa2983131;
-    state_w[3] = 0x340737e0;
-#endif
 
     crypto_loop(mode, key);
 

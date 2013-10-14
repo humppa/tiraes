@@ -9,12 +9,14 @@ READY=test.jpg
 
 $(NAME): debug.o
 
+all: $(NAME)
+
 enc: $(NAME)
-	valgrind ./$(NAME) -e -h $(KEY) < $(PLAIN) > $(CRYPT) | tee debug.log
+	valgrind ./$(NAME) -e -k $(KEY) < $(PLAIN) > $(CRYPT) | tee debug.log
 	@sha1sum -c sums
 
 dec: $(NAME)
-	valgrind ./$(NAME) -d -h $(KEY) < $(CRYPT) > $(READY) | tee debug.log
+	valgrind ./$(NAME) -d -k $(KEY) < $(CRYPT) > $(READY) | tee debug.log
 	@sha1sum -c sums
 
 clean:
