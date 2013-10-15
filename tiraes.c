@@ -15,7 +15,6 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include "debug.h"
 #include "tiraes.h"
 
 void *copy = NULL;
@@ -223,8 +222,6 @@ void *key_expansion(void *key) {
         }
     }
 
-    /// ppkeysched("expanded key schedule", keysched, Nb, Nr);
-
     free(tmp);
 
     return keysched;
@@ -271,7 +268,7 @@ uint8_t hex_val(int chr) {
         return chr - 'a' + 10;
     }
     else {
-        errx(EXIT_FAILURE, E_INPUT, chr);
+        errx(EXIT_FAILURE, E_KEYCHR, chr);
     }
 }
 
@@ -296,28 +293,25 @@ void set_cipher_options(int bytes) {
     }
 }
 
-/* FIXME: This is probably broken right now.
- */
 void *key_from_file(char *keyfile) {
     int chr;
-    int i = 0;
+    int bytes = 0;
     FILE *fp = NULL;
     void *key = malloc_or_die(KEY_MAX);
-
     uint8_t *key_b = (uint8_t*) key;
 
     if ((fp = fopen(keyfile, "r")) == NULL) {
         err(EXIT_FAILURE, "%s", E_FILE);
     }
 
-    while ((chr = getc(fp)) != EOF && i < KEY_MAX) {
-        key_b[i] = chr;
-        i++;
+    while ((chr = getc(fp)) != EOF && bytes < KEY_MAX) {
+        key_b[bytes] = (uint8_t) chr;
+        bytes++;
     }
 
-    printf("luettiin %i tavua\n", i);
+    fclose(fp);
 
-    set_cipher_options(i);
+    set_cipher_options(bytes);
 
     key = realloc(key, 4*Nk);
 
@@ -328,7 +322,6 @@ void *key_from_opt(char *str) {
     int bytes = 0;
     char prev = '\0';
     void *key = malloc_or_die(KEY_MAX);
-
     uint8_t *key_b = (uint8_t*) key;
 
     for (int j=0; j<strlen(str); j++) {
@@ -357,57 +350,97 @@ void *key_from_opt(char *str) {
     return key;
 }
 
-void crypto_loop(bool mode, void *key) {
+/* Input and output.
+ *
+ * Since AES ciphers only data in 16 byte blocks, encrypted
+ * output is padded conforming to ISO/IEC 9797-1 method 2.
+ *
+ * http://en.wikipedia.org/wiki/ISO/IEC_9797-1#Padding
+ */
+void crypto_io(opmode_t mode, void *key) {
     int i = 0;
     int chr = '\0';
     void *state = NULL;
     void *keysched = NULL;
     void (*cipher)(void*, void*);
 
-    copy = malloc_or_die(16);
     state = malloc_or_die(16);
     keysched = key_expansion(key);
-    cipher = mode? &encrypt_cipher: &decrypt_cipher;
+    cipher = mode == ENCRYPT? &encrypt_cipher: &decrypt_cipher;
 
     uint8_t *state_b = (uint8_t*) state;
 
+    /* Main IO loop:
+     *  1. Fill state with input.
+     *  2. Use cipher.
+     *  3. Flush out.
+     */
     while ((chr = getchar()) != EOF) {
-        state_b[i] = (uint8_t) chr;
-
-        i++;
-
         if (i == 16) {
+            i = 0;
             (*cipher)(keysched, state);
-
-            for (int j=0; j<16; j++) putchar(state_b[j]);
-
+            while (i != 16) putchar(state_b[i++]);
             i = 0;
         }
+
+        state_b[i++] = (uint8_t) chr;
     }
 
-    /// FIXME cipher last block too
+    if (mode == ENCRYPT) {
+        /* If state is full, flush it.
+         */
+        if (i == 16) {
+            i = 0;
+            (*cipher)(keysched, state);
+            while (i != 16) putchar(state_b[i++]);
+            i = 0;
+        }
+
+        /* Fill the state with padding.
+         */
+        state_b[i++] = ISO_9797_1_ONE_BIT;
+        while (i != 16) state_b[i++] = 0;
+
+        /* Encrypt and flush the last state.
+         */
+        i = 0;
+        encrypt_cipher(keysched, state);
+        while (i != 16) putchar(state_b[i++]);
+    }
+    else /* mode == DECRYPT */ {
+        if (i != 16) errx(EXIT_FAILURE, "%s", E_INPUT);
+
+        /* Decrypt the last block.
+         */
+        decrypt_cipher(keysched, state);
+
+        /* Find the start of the padding and
+         * flush out preceding data.
+         */
+        while (state_b[--i] != ISO_9797_1_ONE_BIT);
+        for (int j=0; j<i; j++) putchar(state_b[j]);
+    }
 
     free(keysched);
     free(state);
-    free(copy);
 }
 
 int main(int argc, char *argv[]) {
     int  opt;
-    bool mode = true;
     void *key = NULL;
     char *keyfile = NULL;
     char *keyopt = NULL;
+    opmode_t mode = ENCRYPT;
 
     /* tiraes [-e | -d] (-k <hexkey> | -f <filekey>)
      */
     while ((opt = getopt(argc, argv, "def:hk:")) != -1) {
         switch (opt) {
             case 'd':
-                mode = false;
+                mode = DECRYPT;
                 break;
             case 'e':
-                mode = true;
+                mode = ENCRYPT;
                 break;
             case 'f':
                 keyfile = optarg;
@@ -424,6 +457,8 @@ int main(int argc, char *argv[]) {
                 break;
         }
     }
+
+    copy = malloc_or_die(16);
 
     G2 = galois_precalc(2);
     G3 = galois_precalc(3);
@@ -442,11 +477,16 @@ int main(int argc, char *argv[]) {
         errx(EXIT_FAILURE, "%s", E_NOKEY);
     }
 
-    crypto_loop(mode, key);
+    crypto_io(mode, key);
 
-    free(G2);
-    free(G3);
+    free(copy);
     free(key);
+    free(Ge);
+    free(Gd);
+    free(Gb);
+    free(G9);
+    free(G3);
+    free(G2);
 
     return 0;
 }

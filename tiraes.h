@@ -3,7 +3,6 @@
 
 #include <stdlib.h>
 #include <stdint.h>
-#include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -12,22 +11,24 @@
 
 #include <sys/time.h>
 
-#define KEY_MAX 32
+#define KEY_MAX            32
+#define ISO_9797_1_ONE_BIT 0x80
 
-/* Error messages.
- */
+typedef enum {ENCRYPT, DECRYPT} opmode_t;
+
 const char
   *USAGE    = "[-e | -d] (-k <key> | -f <file>)",
-  *E_FILE   = "Failed to open keyfile.\n",
-  *E_INPUT  = "Incomprehensible character spotted: %c\n",
-  *E_NOKEY  = "Unable to proceed without cipher key.\n",
-  *E_KEYLEN = "Key must be 32 (128), 48 (192), or 64 (256) bytes (bits).\n";
+  *E_FILE   = "Failed to open keyfile",
+  *E_NOKEY  = "Unable to proceed without cipher key.",
+  *E_INPUT  = "Encrypted input must be divisble with 16 bytes.",
+  *E_KEYCHR = "Incomprehensible character spotted: %c",
+  *E_KEYLEN = "Key must be 32 (128), 48 (192), or 64 (256) bytes (bits).";
 
 /* Cipher options.
  */
-uint8_t Nb;  //  [4]        Number of 32-bit words comprising the State.
-uint8_t Nk;  //  [4,6,8]    Number of 32-bit words comprising the Cipher Key.
-uint8_t Nr;  //  [10,12,14] Number of rounds.
+uint8_t Nb;  //        [4] Number of 32-bit words comprising the state.
+uint8_t Nk;  //    [4,6,8] Number of words comprising the cipher key.
+uint8_t Nr;  // [10,12,14] Number of rounds.
 
 /* Lookup tables for Galois multiplication.
  * http://en.wikipedia.org/wiki/Rijndael_mix_columns
