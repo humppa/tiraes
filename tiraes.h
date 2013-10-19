@@ -17,12 +17,13 @@
 typedef enum {ENCRYPT, DECRYPT} opmode_t;
 
 const char
-  *USAGE    = "[-e | -d] (-k <key> | -f <file>)",
+  *USAGE    = "[-d | -e] (-f <file> | -k <key>)",
   *E_FILE   = "Failed to open keyfile",
   *E_NOKEY  = "Unable to proceed without cipher key.",
   *E_INPUT  = "Encrypted input must be divisble with 16 bytes.",
   *E_KEYCHR = "Incomprehensible character spotted: %c",
-  *E_KEYLEN = "Key must be 32 (128), 48 (192), or 64 (256) bytes (bits).";
+  *E_KEYLEN = "Key must be exactly 32 bytes (128 bits) long.";
+//*E_KEYLEN = "Key must be 32 (128), 48 (192), or 64 (256) bytes (bits).";
 
 /* Cipher options.
  */
